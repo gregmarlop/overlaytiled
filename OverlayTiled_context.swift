@@ -1,6 +1,8 @@
 import AppKit
 
 // MARK: - Utils
+
+/// Returns the app-specific Application Support directory and ensures it exists.
 func appSupportURL() -> URL {
     let fm = FileManager.default
     let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -8,33 +10,53 @@ func appSupportURL() -> URL {
     try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
     return dir
 }
+
+/// Converts an `NSColor` to an RGBA array in the device RGB color space.
+/// - Parameter c: Source color.
+/// - Returns: `[r, g, b, a]` as `CGFloat`s in 0...1.
 func colorToRGBA(_ c: NSColor) -> [CGFloat] {
     let cc = c.usingColorSpace(.deviceRGB) ?? c
     return [cc.redComponent, cc.greenComponent, cc.blueComponent, cc.alphaComponent]
 }
+
+/// Converts an RGBA array to an `NSColor` in the device RGB color space.
+/// - Parameter a: `[r, g, b, a]`. If the array does not contain 4 elements, `.white` is returned.
 func rgbaToColor(_ a: [CGFloat]) -> NSColor {
     guard a.count == 4 else { return .white }
     return NSColor(deviceRed: a[0], green: a[1], blue: a[2], alpha: a[3])
 }
 
 // MARK: - Settings model + persistence
+
+/// Persisted user settings for the tiled overlay.
 final class OverlaySettings: Codable {
+    /// Overlay text content.
     var text: String = "© COPYRIGHT"
+    /// Overlay rotation angle in degrees.
     var angleDeg: CGFloat = -30
+    /// Base font size for the tiled text.
     var fontSize: CGFloat = 36
+    /// Overall text opacity (0...1).
     var opacity: CGFloat = 0.15
+    /// Stored RGBA components for the color (device RGB).
     var colorRGBA: [CGFloat] = colorToRGBA(.white)
+    /// Spacing in points between repeated strings (both axes).
     var spacing: CGFloat = 24
+    /// If `true`, the overlay is click-through and cannot be dragged/resized.
     var locked: Bool = false
+    /// Last known overlay window frame.
     var windowFrame: CGRect? = nil
 
+    /// Computed color getter/setter for `colorRGBA`.
     var color: NSColor {
         get { rgbaToColor(colorRGBA) }
         set { colorRGBA = colorToRGBA(newValue) }
     }
 
+    /// File location for persisted settings.
     static let storageURL = appSupportURL().appendingPathComponent("settings.json")
 
+    /// Loads settings from disk or creates defaults if none are present.
     static func load() -> OverlaySettings {
         if let data = try? Data(contentsOf: storageURL),
            let s = try? JSONDecoder().decode(OverlaySettings.self, from: data) {
@@ -44,6 +66,8 @@ final class OverlaySettings: Codable {
         s.save()
         return s
     }
+
+    /// Persists the current settings to disk. Failures are ignored.
     func save() {
         if let data = try? JSONEncoder().encode(self) {
             try? data.write(to: Self.storageURL)
@@ -52,13 +76,22 @@ final class OverlaySettings: Codable {
 }
 
 // MARK: - Resizable overlay view with tiled, rotated text + context menu
+
+/// An overlay `NSView` that tiles rotated text, supports click-through lock,
+/// and implements hit-tested move/resize interactions.
 final class TiledOverlayView: NSView {
+    /// Backing settings (owned externally).
     let settings: OverlaySettings
+
     private let borderLayer = CAShapeLayer()
     private let hitPad: CGFloat = 8
 
+    /// Current drag mode for mouse interactions.
     enum DragMode { case none, move, resize(edges: RectEdges) }
-    struct RectEdges: OptionSet { let rawValue: Int
+
+    /// Edge bitset used for resize hit-testing.
+    struct RectEdges: OptionSet {
+        let rawValue: Int
         static let left   = RectEdges(rawValue: 1 << 0)
         static let right  = RectEdges(rawValue: 1 << 1)
         static let top    = RectEdges(rawValue: 1 << 2)
@@ -69,9 +102,13 @@ final class TiledOverlayView: NSView {
     private var dragOriginInScreen: NSPoint = .zero
     private var originalWinFrame: NSRect = .zero
 
-    // weak app delegate for menu actions
+    /// Weak reference to the app delegate for building the context menu.
     weak var appDelegate: AppDelegate?
 
+    /// Creates the overlay view.
+    /// - Parameters:
+    ///   - frame: Initial frame.
+    ///   - settings: Shared settings model.
     init(frame: NSRect, settings: OverlaySettings) {
         self.settings = settings
         super.init(frame: frame)
@@ -80,10 +117,11 @@ final class TiledOverlayView: NSView {
 
         borderLayer.strokeColor = NSColor.white.withAlphaComponent(0.6).cgColor
         borderLayer.fillColor = NSColor.clear.cgColor
-        borderLayer.lineDashPattern = [6,6]
+        borderLayer.lineDashPattern = [6, 6]
         borderLayer.lineWidth = 2
         layer?.addSublayer(borderLayer)
     }
+
     required init?(coder: NSCoder) { fatalError() }
 
     override func layout() {
@@ -120,10 +158,11 @@ final class TiledOverlayView: NSView {
         let str = NSAttributedString(string: settings.text, attributes: attrs)
         let textSize = str.size()
 
-        // Tile
+        // Tile geometry
         let stepX = textSize.width + settings.spacing
         let stepY = textSize.height + settings.spacing
 
+        // Extend beyond bounds so rotation fills edges
         let inset: CGFloat = max(stepX, stepY) * 2
         let startX: CGFloat = -inset
         let endX: CGFloat = bounds.width + inset
@@ -141,7 +180,9 @@ final class TiledOverlayView: NSView {
         }
     }
 
-    // Context menu same as menubar
+    // MARK: - Context menu
+
+    /// Provides the same menu as the status bar item.
     override func menu(for event: NSEvent) -> NSMenu? {
         guard let app = appDelegate else { return nil }
         return app.buildContextMenu()
@@ -156,6 +197,8 @@ final class TiledOverlayView: NSView {
     }
 
     // MARK: - Hit testing for resize/move
+
+    /// Returns the edges being hit-tested at a point within a rect.
     private func edgesFor(point p: NSPoint, in rect: NSRect) -> RectEdges {
         var edges: RectEdges = []
         if abs(p.x - rect.minX) <= hitPad { edges.insert(.left) }
@@ -215,11 +258,14 @@ final class TiledOverlayView: NSView {
 }
 
 // MARK: - Overlay window controller
+
+/// Thin controller around a borderless, floating window hosting the tiled overlay.
 final class OverlayWindowController {
     private let settings: OverlaySettings
     private(set) var window: NSWindow!
     private var view: TiledOverlayView!
 
+    /// Creates the overlay window using persisted frame if available.
     init(settings: OverlaySettings, appDelegate: AppDelegate) {
         self.settings = settings
         let screen = NSScreen.main?.frame ?? NSRect(x: 0, y: 0, width: 900, height: 600)
@@ -240,14 +286,26 @@ final class OverlayWindowController {
         window.makeKeyAndOrderFront(nil)
     }
 
+    /// Shows the overlay window.
     func show() { window.makeKeyAndOrderFront(nil) }
+
+    /// Hides the overlay window.
     func hide() { window.orderOut(nil) }
+
+    /// Centers the overlay window on the current screen.
     func center() { window.center() }
+
+    /// Toggles click-through behavior; when `true` the window ignores mouse events.
     func setLocked(_ v: Bool) { window.ignoresMouseEvents = v }
+
+    /// Triggers a redraw of the content view.
     func refresh() { view.needsDisplay = true }
 }
 
 // MARK: - Settings window
+
+/// A simple settings window controller providing controls for text, angle, font size,
+/// opacity, spacing, color, and click-through locking.
 final class SettingsWC: NSWindowController {
     private let settings: OverlaySettings
     private let overlay: OverlayWindowController
@@ -276,6 +334,7 @@ final class SettingsWC: NSWindowController {
 
     required init?(coder: NSCoder) { fatalError() }
 
+    /// Builds the settings UI using a compact grid layout.
     private func buildUI() {
         guard let content = window?.contentView else { return }
 
@@ -320,6 +379,7 @@ final class SettingsWC: NSWindowController {
         }
     }
 
+    /// Loads values from `OverlaySettings` into the controls.
     private func loadValues() {
         textField.stringValue = settings.text
         angleSlider.doubleValue = Double(settings.angleDeg)
@@ -330,6 +390,7 @@ final class SettingsWC: NSWindowController {
         lockCheck.state = settings.locked ? .on : .off
     }
 
+    /// Handles control value changes, persists settings, and refreshes the overlay.
     @objc private func valueChanged(_: Any?) {
         settings.text = textField.stringValue
         settings.angleDeg = CGFloat(angleSlider.doubleValue)
@@ -348,8 +409,11 @@ final class SettingsWC: NSWindowController {
 }
 
 // MARK: - Status bar app (About with custom icon + clickable link; overlay right-click menu)
+
+/// App delegate configuring a status-bar utility app and managing the overlay/settings windows.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     static let version = "1.3"
+
     let settings = OverlaySettings.load()
     var statusItem: NSStatusItem!
     var overlay: OverlayWindowController!
@@ -360,14 +424,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let btn = statusItem.button {
-            if #available(macOS 11.0, *) { btn.image = NSImage(systemSymbolName: "square.on.square.squareshape.controlhandles", accessibilityDescription: "Overlay") }
-            else { btn.title = "Ov" }
+            if #available(macOS 11.0, *) {
+                btn.image = NSImage(systemSymbolName: "square.on.square.squareshape.controlhandles", accessibilityDescription: "Overlay")
+            } else {
+                btn.title = "Ov"
+            }
         }
 
         overlay = OverlayWindowController(settings: settings, appDelegate: self)
         rebuildMenu()
     }
 
+    /// Builds and returns the context/status menu.
     func buildContextMenu() -> NSMenu {
         let menu = NSMenu()
         menu.addItem(withTitle: "About OverlayTiled…", action: #selector(showAbout(_:)), keyEquivalent: "")
@@ -383,10 +451,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return menu
     }
 
+    /// Assigns a freshly built menu to the status item.
     private func rebuildMenu() {
         statusItem.menu = buildContextMenu()
     }
 
+    /// Shows an About dialog with app info and a clickable website link.
     @objc private func showAbout(_ sender: Any?) {
         let alert = NSAlert()
         alert.messageText = "OverlayTiled"
@@ -395,11 +465,11 @@ Simple overlay watermark tool for macOS.
 Version \(Self.version)
 © 2025 Gregori Martínez
 """
-        // Usa el mismo icono que en la barra de menús; sin “i” azul
+        // Use the same icon as the status bar button; avoids the default blue info icon.
         alert.icon = statusItem.button?.image
         alert.alertStyle = .informational
 
-        // Enlace clicable
+        // Clickable link
         let linkField = NSTextField(labelWithString: "")
         linkField.allowsEditingTextAttributes = true
         linkField.isSelectable = true
@@ -412,24 +482,35 @@ Version \(Self.version)
         alert.runModal()
     }
 
+    /// Toggles visibility of the overlay window and refreshes the menu text.
     @objc private func toggleOverlay(_ sender: Any?) {
         if overlay.window.isVisible { overlay.hide() } else { overlay.show() }
         rebuildMenu()
     }
+
+    /// Toggles click-through state on the overlay and refreshes the menu text.
     @objc private func toggleLock(_ sender: Any?) {
         settings.locked.toggle()
         settings.save()
         overlay.setLocked(settings.locked)
         rebuildMenu()
     }
+
+    /// Opens (or shows) the settings window and activates the app.
     @objc private func openSettings(_ sender: Any?) {
         if settingsWC == nil { settingsWC = SettingsWC(settings: settings, overlay: overlay) }
         settingsWC?.showWindow(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
+
+    /// Centers the overlay window.
     @objc private func centerOverlay(_ sender: Any?) { overlay.center() }
+
+    /// Quits the app.
     @objc private func quitApp(_ sender: Any?) { NSApp.terminate(nil) }
 }
+
+// MARK: - App entry point
 
 let app = NSApplication.shared
 let delegate = AppDelegate()
