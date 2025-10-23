@@ -22,24 +22,68 @@ A macOS menu bar application that creates a floating, transparent overlay window
 
 ## Installation
 
-### Build from Source
+### Build and Run Without Xcode
+
+#### Requirements
+- macOS 10.15 or later
+- Command Line Tools (`xcode-select --install`)
+
+#### Compile
 
 ```bash
-git clone https://github.com/gregmarlop/overlaytiled.git
-cd overlaytiled
-swift build
+swiftc -O \
+  -framework AppKit \
+  -o OverlayTiled \
+  OverlayTiled_context.swift
 ```
 
-Or compile directly:
+#### Run
+
 ```bash
-swiftc -o OverlayTiled OverlayTiled.swift -framework AppKit
+./OverlayTiled &
+```
+
+The app will appear in your **menu bar** (no Dock icon).  
+Settings are saved automatically to:
+```
+~/Library/Application Support/OverlayTiled/settings.json
+```
+
+#### (Optional) Create an `.app` Bundle
+
+```bash
+mkdir -p ~/Applications/OverlayTiled.app/Contents/MacOS
+cp OverlayTiled ~/Applications/OverlayTiled.app/Contents/MacOS/
+```
+
+Create a minimal `Info.plist`:
+
+```bash
+cat > ~/Applications/OverlayTiled.app/Contents/Info.plist <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" \
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>OverlayTiled</string>
+  <key>CFBundleIdentifier</key><string>ch.gregmarlop.overlaytiled</string>
+  <key>CFBundleExecutable</key><string>OverlayTiled</string>
+  <key>LSUIElement</key><true/>
+</dict>
+</plist>
+EOF
+```
+
+Then run:
+```bash
+open ~/Applications/OverlayTiled.app
 ```
 
 ## Usage
 
-1. Launch OverlayTiled - it will appear in your menu bar
-2. Click the menu bar icon to access controls
-3. Select "Show Overlay" to display the overlay window
+1. Launch OverlayTiled - it will appear in your menu bar  
+2. Click the menu bar icon to access controls  
+3. Select "Show Overlay" to display the overlay window  
 4. Configure the overlay through "Settings":
    - Text: The text to display (default: "© COPYRIGHT")
    - Angle: Rotation angle in degrees
